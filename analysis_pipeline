@@ -1,0 +1,193 @@
+####WARMING CHAMBER EXAMPLE######
+#February 2016
+
+#######Call QIIME#######
+MacQiime
+
+#For a list of program configurations, will throw errors if something not set up correctly
+print_qiime_config.py
+
+#Navigate to working directoty
+cd /Users/juliastevens...
+
+#Using QIIME v1.9.1 multiple join paired ends
+#uses defaults from join_paired_ends.py can pass a parameter file is want to change parameters
+#fastq_directory is what directly downloads from BaseSpace
+multiple_join_paired_ends.py -i fastq_files/ -o joined_ends/
+
+#Check merged file names with mapping file and create sample_names.txt file
+#Note: the output will give .fastq files, so will need to convert to .fasta before moving on - automate
+
+nano convert_fastq.sh
+
+#! /bin/bash
+#Shell script to automate fastq to fasta conversion
+
+for file in $(<sample_names.txt)
+do
+    convert_fastaqual_fastq.py -f joined_ends/${file}.fastq -c fastq_to_fastaqual -F -o converted_merged_reads
+
+done
+
+#Control+X, Y, enter will exit from nano while saving your modified program
+chmod +x convert_fastq.sh
+./convert_fastq.sh
+
+#To merge assembled reads into file with the sequences
+add_qiime_labels.py -i converted_merged_reads/ -m chamber_map.txt -c InputFileName -n 1 -o combined_seqs/
+count_seqs.py -i combined_seqs/combined_seqs.fna
+
+#OUTPUT
+#325092  : combined_seqs/combined_seqs.fna (Sequence lengths (mean +/- std): 149.3486 +/- 125.6796)
+#325092  : Total
+
+#For a summary of the sequences use Mothur commands within QIIME
+#Call mothur
+mothur
+#Summary stats of sequences
+summary.seqs(fasta=combined_seqs/combined_seqs.fna)
+
+#OUTPUT
+#		Start	End	NBases	Ambigs	Polymer	NumSeqs
+#Minimum:	1	35	35	0	2	1
+#2.5%-tile:	1	35	35	0	3	8128
+#25%-tile:	1	35	35	0	5	81274
+#Median: 	1	35	35	35	35	162547
+#75%-tile:	1	292	292	35	35	243820
+#97.5%-tile:	1	293	293	35	35	316965
+#Maximum:	1	596	596	35	35	325092
+#Mean:	1	149.327	149.327	18.0029	20.2416
+## of Seqs:	325092
+
+#Screen Sequences outside of the expected length of product ~ expected range for EMP 16S primers
+screen.seqs(fasta=current, minlength=285, maxlength=295, maxambig=0, maxhomop=8)
+summary.seqs(fasta=current)
+
+#OUTPUT
+#		Start	End	NBases	Ambigs	Polymer	NumSeqs
+#Minimum:	1	285	285	0	3	1
+#2.5%-tile:	1	291	291	0	4	3418
+#25%-tile:	1	292	292	0	4	34180
+#Median: 	1	292	292	0	5	68360
+#75%-tile:	1	292	292	0	5	102539
+#97.5%-tile:	1	293	293	0	6	133301
+#Maximum:	1	295	295	0	8	136718
+#Mean:	1	291.955	291.955	0	4.68731
+## of Seqs:	136718
+
+quit()
+
+vsearch --uchime_ref combined_seqs.good.fna --db 97_otus.fasta --nonchimeras combined_seqs_good_nonchimera.fna
+
+#Pick OTUs ~NOTE this command clusters at 97% similarity~ using the cdhit clustering method [fast, but recommended to use uclust]
+pick_otus.py -i combined_seqs_good_nonchimera.fna -m uclust -o uclust_picked_otus/ -s 0.97
+
+#Pick representative sequences
+mkdir uclust_rep_seqs/
+pick_rep_set.py -i uclust_picked_otus/combined_seqs_good_nonchimera_otus.txt -f combined_seqs_good_nonchimera.fna -o uclust_rep_seqs/uclust_rep_seqs.fasta -l uclust_rep_seqs/uclust_rep_seqs.log
+count_seqs.py -i uclust_rep_seqs/uclust_rep_seqs.fasta 
+
+#OUTPUT
+#15571  : uclust_rep_seqs/uclust_rep_seqs.fasta (Sequence lengths (mean +/- std): 292.0186 +/- 0.4099)
+#15571  : Total
+
+#Align representative sequences, requiring 100 base pair overlap, default: pynast algorithm aligns against greengenes 16s database
+align_seqs.py -i uclust_rep_seqs/uclust_rep_seqs.fasta -o pynast_aligned/ -e 100
+count_seqs.py -i pynast_aligned/uclust_rep_seqs_aligned.fasta 
+
+#OUTPUT
+#15511  : pynast_aligned/uclust_rep_seqs_aligned.fasta (Sequence lengths (mean +/- std): 7682.0000 +/- 0.0000)
+#15511  : Total
+
+#Filter alignment removes position where gaps are in every sequence and any sequence that is off by more than 3 standard deviations
+filter_alignment.py -i pynast_aligned/uclust_rep_seqs_aligned.fasta -o filtered_alignment/ -r
+count_seqs.py -i filtered_alignment/uclust_rep_seqs_aligned_pfiltered.fasta 
+
+#OUTPUT
+15420  : filtered_alignment/uclust_rep_seqs_aligned_pfiltered.fasta (Sequence lengths (mean +/- std): 367.0000 +/- 0.0000)
+15420  : Total
+
+#Assign taxonomy to representative sequences [uses rdp default database, rdp method, and confidence interval of 0.8]
+assign_taxonomy.py -i filtered_alignment/uclust_rep_seqs_aligned_pfiltered.fasta -m rdp -c 0.8
+
+#Make a phylogenetic tree; Tree is necessary is Unifrac analyses are wanted to calculate community similarity matix
+#Make new directory for output
+mkdir fasttree_uclust
+#Make tree
+make_phylogeny.py -i filtered_alignment/uclust_rep_seqs_aligned_pfiltered.fasta -t fasttree -o fasttree_uclust/fasttree_uclust.tre
+
+#The next step makes OTU table [.biom], appends assigned taxonomy, and excludes the alignment failures
+make_otu_table.py -i uclust_picked_otus/combined_seqs_good_nonchimera_otus.txt -o otu_table.biom -e pynast_aligned/uclust_rep_seqs_failures.fasta -t rdp_assigned_taxonomy/uclust_rep_seqs_aligned_pfiltered_tax_assignments.txt 
+
+#Remove low abundance OTUs from the .biom file ~likely sequencing error~
+filter_otus_from_otu_table.py -i otu_table.biom -o filtered_otu_table.biom -n 3
+biom summarize_table -i filtered_otu_table.biom -o summary_filtered_otu_table.txt
+
+#OUTPUT
+#Num samples: 7
+#Num observations: 3305
+#Total count: 66870
+#Table density (fraction of non-zero values): 0.469
+#
+#Counts/sample summary:
+# Min: 5090.0
+# Max: 13292.0
+# Median: 9736.000
+# Mean: 9552.857
+# Std. dev.: 2763.052
+# Sample Metadata Categories: None provided
+# Observation Metadata Categories: taxonomy
+
+
+##Remove OTUs that are in your negative control from the dataset
+mkdir contam_removal/
+cp filtered_otu_table.biom contam_removal/filtered_otu_table.biom
+cp chamber_map.txt contam_removal/chamber_map.txt
+cd contam_removal/
+filter_samples_from_otu_table.py -i filtered_otu_table.biom -o blanks_otu_table.biom -m chamber_map.txt -s "Chamber:NA"
+filter_otus_from_otu_table.py -i blanks_otu_table.biom -o filtered_blanks_otu_table.biom -n 1
+biom convert -i filtered_blanks_otu_table.biom -o otus_to_remove.txt --to-tsv --table-type="OTU table"
+filter_otus_from_otu_table.py -i filtered_otu_table.biom -o filtered_otu_table_minuscontam.biom -e otus_to_remove.txt 
+filter_samples_from_otu_table.py -i filtered_otu_table_minuscontam.biom -o filtered_otu_table_contamremoved.biom -n 1
+
+biom summarize_table -i filtered_otu_table_contamremoved.biom -o summary_filtered_contamremoved.txt
+open summary_filtered_contamremoved.txt 
+
+#Num samples: 6
+#Num observations: 2643
+#Total count: 30887
+#Table density (fraction of non-zero values): 0.509
+#
+#Counts/sample summary:
+# Min: 3688.0
+# Max: 6394.0
+# Median: 5417.000
+# Mean: 5147.833
+# Std. dev.: 1012.306
+# Sample Metadata Categories: None provided
+# Observation Metadata Categories: taxonomy
+
+#Remove OTUs which did not assign to Bacteria
+filter_taxa_from_otu_table.py -i filtered_otu_table_contamremoved.biom -o filtered_otu_table_contamremoved_nounclassified.biom -n None,Unclassified
+biom summarize_table -i filtered_otu_table_contamremoved_nounclassified.biom -o summary_unclassified_removed.txt
+
+#Num samples: 6
+#Num observations: 2623
+#Total count: 30709
+#Table density (fraction of non-zero values): 0.510
+#
+#Counts/sample summary:
+# Min: 3684.0
+# Max: 6354.0
+# Median: 5389.500
+# Mean: 5118.167
+# Std. dev.: 1006.845
+# Sample Metadata Categories: None provided
+# Observation Metadata Categories: taxonomy
+
+###CORE DIVERSITY ANALYSES###
+#To appropriately compare each sample, need to rarefy to even number of sequences 
+#3684 is used as an example, actual number should be based on sample with the fewest sequences
+###What if a chamber sample only had 50 sequences?
+
+core_diversity_analyses.py -i filtered_otu_table_contamremoved_nounclassified.biom -m chamber_map.txt -t fasttree_uclust/fasttree_uclust.tre -o core_diversity_analyses -e 3684 -c Chamber,MeanAT -a -O 12
